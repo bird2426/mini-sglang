@@ -39,6 +39,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+quantization = [
+    "autoawq>=0.2.8",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",

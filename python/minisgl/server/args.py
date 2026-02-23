@@ -7,6 +7,7 @@ from typing import List, Tuple
 
 import torch
 from minisgl.distributed import DistributedInfo
+from minisgl.quant import list_quant_types
 from minisgl.scheduler import SchedulerConfig
 from minisgl.utils import init_logger
 
@@ -218,6 +219,15 @@ def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bo
     )
 
     parser.add_argument(
+        "--quantization",
+        "--quant",
+        type=str,
+        default=None,
+        choices=list_quant_types() + ["auto"],
+        help="The quantization method to use for the model weights.",
+    )
+
+    parser.add_argument(
         "--shell-mode",
         action="store_true",
         help="Run the server in shell mode.",
@@ -252,6 +262,15 @@ def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bo
         from minisgl.utils import cached_load_hf_config
 
         dtype_str = cached_load_hf_config(kwargs["model_path"]).dtype
+
+    if kwargs["quantization"] == "auto":
+        from minisgl.quant import detect_quant_config
+
+        detected = detect_quant_config(kwargs["model_path"])
+        if detected:
+            kwargs["quantization"] = detected["quant_type"]
+        else:
+            kwargs["quantization"] = None
 
     DTYPE_MAP = {
         "float16": torch.float16,

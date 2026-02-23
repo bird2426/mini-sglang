@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
 from minisgl.distributed import DistributedInfo
@@ -10,6 +10,7 @@ from minisgl.utils import cached_load_hf_config
 
 if TYPE_CHECKING:
     from minisgl.models import ModelConfig
+    from minisgl.quant import BaseQuantConfig
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,9 @@ class EngineConfig:
     use_dummy_weight: bool = False
     use_pynccl: bool = True
     max_seq_len_override: int | None = None
-    num_page_override: int | None = None  # if not None, will override the number of pages
+    num_page_override: int | None = None
+    quantization: Optional[str] = None
+    quant_config: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     @cached_property
     def hf_config(self):

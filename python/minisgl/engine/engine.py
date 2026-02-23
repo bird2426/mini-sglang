@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Dict, NamedTuple, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import torch
 from minisgl.attention import create_attention_backend
@@ -11,6 +11,7 @@ from minisgl.kvcache import create_kvcache
 from minisgl.layers import set_rope_device
 from minisgl.models import create_model, load_weight
 from minisgl.moe import create_moe_backend
+from minisgl.quant import load_quantized_weight
 from minisgl.utils import div_even, init_logger, is_sm90_supported, is_sm100_supported, torch_dtype
 
 from .config import EngineConfig
@@ -143,6 +144,14 @@ class Engine:
                 k: torch.randn_like(v, device=self.device)
                 for k, v in self.model.state_dict().items()
             }
+        
+        if config.quantization:
+            logger.info_rank0(f"Loading quantized model with {config.quantization} quantization")
+            state_dict, _ = load_quantized_weight(
+                config.model_path,
+                self.device,
+            )
+            return {k: v.to(self.dtype) for k, v in state_dict.items()}
         else:
             return {
                 k: v.to(self.dtype) for k, v in load_weight(config.model_path, self.device).items()
