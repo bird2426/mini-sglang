@@ -147,6 +147,108 @@ class Engine:
         
         if config.quantization:
             logger.info_rank0(f"Loading quantized model with {config.quantization} quantization")
+            state_dict, quant_config = load_quantized_weight(
+                config.model_path,
+                self.device,
+            )
+            # Dequantize weights to FP16 for compatibility with regular Linear layers
+            state_dict = self._dequantize_weights(state_dict, quant_config)
+            return {k: v.to(self.dtype) for k, v in state_dict.items()}
+        else:
+            return {
+                k: v.to(self.dtype) for k, v in load_weight(config.model_path, self.device).items()
+            }
+
+    def _dequantize_weights(
+        self,
+        state_dict: Dict[str, torch.Tensor],
+        quant_config,
+    ) -> Dict[str, torch.Tensor]:
+        """Dequantize AWQ weights to FP16 for inference.
+        
+        This is a workaround to make quantized models work with the current
+        architecture. For production, we should implement proper QuantizedLinear layers.
+        """
+        from minisgl.layers.linear import awq_dequantize
+        
+        dequantized = {}
+        
+        # Find all quantized weights
+        quantized_keys = {}  # base_key -> {qweight, scales, qzeros}
+        for key, value in state_dict.items():
+            # Find base key by removing .qweight, .scales, .qzeros suffix
+            base_key = None
+            if key.endswith(".qweight"):
+                base_key = key[:-len(".qweight")]
+                if base_key not in quantized_keys:
+                    quantized_keys[base_key] = {}
+                quantized_keys[base_key]["qweight"] = value
+            elif key.endswith(".scales"):
+                base_key = key[:-len(".scales")]
+                if base_key not in quantized_keys:
+                    quantized_keys[base_key] = {}
+                quantized_keys[base_key]["scales"] = value
+            elif key.endswith(".qzeros"):
+                base_key = key[:-len(".qzeros")]
+                if base_key not in quantized_keys:
+                    quantized_keys[base_key] = {}
+                quantized_keys[base_key]["qzeros"] = value
+        
+        # Process each quantized layer
+        for base_key, qparts in quantized_keys.items():
+            if "qweight" not in qparts or "scales" not in qparts:
+                continue
+                
+            qweight = qparts["qweight"]
+            scales = qparts["scales"]
+            qzeros = qparts.get("qzeros", None)
+            
+            # Get bits and group_size from quant_config or detect from shapes
+            bits = quant_config.bits if quant_config else 4
+            group_size = quant_config.group_size if quant_config else 128
+            
+            # AWQ weights are stored as [out_features // pack_factor, in_features]
+            # Need to transpose for dequantize function
+            qweight_t = qweight.t().contiguous()
+            
+            if qzeros is not None:
+                qzeros_t = qzeros.t().contiguous()
+            else:
+                # Create zeros if no zero points
+                num_groups = qweight_t.shape[0] // group_size
+                out_features = qweight_t.shape[1] * (32 // bits)
+                qzeros_t = torch.zeros(
+                    out_features // (32 // bits), num_groups,
+                    dtype=scales.dtype, device=qweight.device
+                )
+            
+            # Transpose scales: [out_features, num_groups] -> [num_groups, out_features]
+            scales_t = scales.t().contiguous()
+            
+            # Dequantize
+            weight = awq_dequantize(qweight_t, scales_t, qzeros_t, bits=bits, group_size=group_size)
+            
+            # Store as regular weight
+            dequantized[f"{base_key}.weight"] = weight
+            
+            logger.debug(f"Dequantized {base_key}: {weight.shape}")
+        
+        # Copy non-quantized weights as-is
+        for key, value in state_dict.items():
+            if not any(key.endswith(suffix) for suffix in (".qweight", ".scales", ".qzeros")):
+                dequantized[key] = value
+        
+        return dequantized
+
+    def _determine_num_pages(self, old_free_memory: int, config: EngineConfig) -> int:
+        if config.use_dummy_weight:
+            return {
+                k: torch.randn_like(v, device=self.device)
+                for k, v in self.model.state_dict().items()
+            }
+        
+        if config.quantization:
+            logger.info_rank0(f"Loading quantized model with {config.quantization} quantization")
             state_dict, _ = load_quantized_weight(
                 config.model_path,
                 self.device,
